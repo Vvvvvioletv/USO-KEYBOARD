@@ -10,5 +10,6 @@ target_include_directories(usb PUBLIC
 target_link_libraries(usb
     pico_stdlib
     tinyusb_device
+    pico_unique_id
     tinyusb_board
 )

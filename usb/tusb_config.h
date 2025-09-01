@@ -41,6 +41,8 @@
 #define BOARD_TUD_RHPORT      0
 #endif
 
+#define CFG_TUSB_RHPORT0_MODE   OPT_MODE_DEVICE
+
 // RHPort max operational speed can defined by board.mk
 #ifndef BOARD_TUD_MAX_SPEED
 #define BOARD_TUD_MAX_SPEED   OPT_MODE_DEFAULT_SPEED

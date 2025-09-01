@@ -26,6 +26,8 @@
 #define ENC_B 7
 #define ENC_SW 8
 
+#define info(msg) tud_cdc_n_write(0, (uint8_t const *)msg, sizeof(msg) - 1)
+
 const uint32_t ADC_READ_INTERVAL_MS = 10;
 
 static uint16_t last_encoder_count = 0;
@@ -53,15 +55,6 @@ const uint8_t queue_data_size = 20;
 
 void core1_task()
 {
-    board_init();
-    // tusb_init();
-    tud_init(BOARD_TUD_RHPORT);
-    tusb_init();
-
-    // TinyUSB board init callback after init
-    // board_init_after_tusb();
-
-    stdio_init_all();
     adc_init();
     adc_gpio_init(26);
     adc_gpio_init(27);
@@ -73,9 +66,7 @@ void core1_task()
 
     while (true)
     {
-
         tud_task();
-        printf("test");
         adc_select_input(0);
         data.adc0_value = adc_read();
         adc_select_input(1);
@@ -255,6 +246,30 @@ void ec11_init()
     gpio_set_irq_enabled_with_callback(8, GPIO_IRQ_EDGE_FALL, true, ec11_irq);
 }
 
+void tud_cdc_rx_cb(uint8_t itf)
+{
+    // allocate buffer for the data in the stack
+    uint8_t buf[CFG_TUD_CDC_RX_BUFSIZE];
+
+    // read the available data
+    // | IMPORTANT: also do this for CDC0 because otherwise
+    // | you won't be able to print anymore to CDC0
+    // | next time this function is called
+    uint32_t count = tud_cdc_n_read(itf, buf, sizeof(buf));
+
+    // check if the data was received on the second cdc interface
+    if (itf == 1)
+    {
+        // process the received data
+        buf[count] = 0; // null-terminate the string
+        // now echo data back to the console on CDC 0
+
+        // and echo back OK on CDC 1
+        tud_cdc_n_write(itf, (uint8_t const *)"OK\r\n", 4);
+        tud_cdc_n_write_flush(itf);
+    }
+}
+
 int main()
 {
     // stdio_init_all();
@@ -287,12 +302,16 @@ int main()
 
     ec11_init();
 
+    board_init();
+    tusb_init();
+    stdio_init_all();
+
     queue_init(&adc_queue, sizeof(adc_data), queue_data_size);
     multicore_launch_core1(core1_task);
 
     static struct repeating_timer fps_timer;
     add_repeating_timer_ms(1000, fps_timer_callback, NULL, &fps_timer);
-    
+
     int progress_len = 0;
     uint8_t progress[1] = {0xFF};
     uint8_t clear_arr[128] = {0};
@@ -300,30 +319,11 @@ int main()
     static uint32_t last_screen_update = 0;
     const uint32_t SCREEN_UPDATE_INTERVAL_MS = 50;
 
-    // while (true)
-    // {
-    //     frame_count++;
-    //     snprintf(fps_str, sizeof(fps_str), "%d", fps);
-    //     for (int i = 0; i < 8; i++)
-    //     {
-    //         oled_write_string(frame, (position){i * 8, i * 8}, fps_str);
-    //         partial_update(i, 0, frame, OLED_WIDTH);
-    //     }
-    //     oled_render_frame(frame);
-    // }
-
-    // while(true)
-    // {
-    // frame_count++;
-    // snprintf(fps_str, sizeof(fps_str), "%d", fps);
-    // oled_write_string(frame, (position){60, 8}, fps_str);
-    // partial_update(1, 0, frame + OLED_WIDTH, OLED_WIDTH);
-    // }
-
     while (true)
     {
         // queue_remove_blocking(&adc_queue, &get_data);
-        queue_try_remove(&adc_queue,&get_data);
+        queue_try_remove(&adc_queue, &get_data);
+        info("core 0\n");
 
         frame_count++;
         partial_update_frame(frame, &get_data);

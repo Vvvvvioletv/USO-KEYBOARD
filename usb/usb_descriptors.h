@@ -30,4 +30,8 @@ enum
   REPORT_ID_KEYBOARD = 1,
 };
 
+// External references
+extern uint8_t const desc_hid_report[];
+extern uint8_t const desc_configuration[];
+
 #endif /* USB_DESCRIPTORS_H_ */
