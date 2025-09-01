@@ -10,11 +10,20 @@
 #define OLED_SIZE           (OLED_HEIGHT * OLED_WIDTH) 
 #define OLED_SIZE_BYTE      (OLED_SIZE / 8)
 
-#define PIN_SCL PICO_DEFAULT_I2C_SCL_PIN 
-#define PIN_SDA PICO_DEFAULT_I2C_SDA_PIN
 
-#define OLED_I2C_ADDR 0x3C
-#define OLED_BAUD (1.5 * 1000000)
+// #define PIN_SCL PICO_DEFAULT_I2C_SCL_PIN 
+// #define PIN_SDA PICO_DEFAULT_I2C_SDA_PIN
+
+#define SPI0_DC 1
+#define SPI0_SCK 2
+#define SPI0_TX 3
+#define SPI0_CS 5
+#define SPI0_RES 14
+
+#define OLED_SPI_PORT spi0
+#define OLED_SPI_BAUD 10000000
+// // #define OLED_I2C_ADDR 0x3C
+// #define OLED_BAUD (4.07 * 100000)
 
 //Commands
 #define OLED_DISPLAY_OFF                _u(0xAE)
@@ -36,35 +45,46 @@
 #define FRAME_NUM                          2
 
 
+
 typedef struct{
     uint8_t frame[OLED_SIZE_BYTE];
 }frame;
 
-static frame frameBuff[FRAME_NUM];
+static frame frame_buff[FRAME_NUM];
 
 typedef uint8_t (*func)(uint16_t);
 
-
-void OLED_Init(void);
-void OLED_initFrame(uint8_t *frame);
-void OLED_Clear();
-void OLED_RenderFrame(uint8_t *frame);
-void OLED_RenderFrame_DMA(uint8_t *frame);
-void OLED_RenderFrame_DMA_Clear(uint8_t *frame);
-void OLED_setPixel(uint8_t *frame, int_fast16_t x, int_fast16_t y, uint8_t on);
-void OLED_WriteChar(uint8_t *frame, int_fast16_t x, int_fast16_t y, uint8_t ch);
-void OLED_WriteChar_fix(uint8_t *frame, int_fast16_t x, int_fast16_t y, uint8_t ch);
-void OLED_DrawFun(uint8_t *frame,func f,uint8_t x1,uint8_t x2);
-void OLED_WriteString(uint8_t *frame, int_fast16_t x, int_fast16_t y, char *str);
-void OLED_RenderArray(uint8_t *buf,uint16_t num);
-void OLED_DrawLine(uint8_t *frame, int_fast16_t x0, int_fast16_t y0, int_fast16_t x1, int_fast16_t y1, uint8_t on);
+typedef struct position{
+    uint8_t x;
+    uint8_t y;
+}position;
 
 
-static inline int OLED_WriteCmd(uint8_t cmd);
-static inline void OLED_Set_Page(uint8_t page);
-static inline void OLED_Fill_Screen_Pure(uint8_t clo);
-static inline int_fast16_t OLED_GetFontIndex(uint8_t ch);
-static inline void OLED_WriteCmdList(uint8_t *list,unsigned int num);
+void oled_init(void);
+void oled_init_frame(uint8_t *frame);
+void oled_clear();
+void oled_fill_white();
+void oled_render_frame(uint8_t *frame);
+void oled_render_frame_dma(uint8_t *frame);
+void oled_render_frame_dma_clear(uint8_t *frame);
+void oled_set_pixel(uint8_t *frame, position pos,uint8_t on);
+void oled_write_char(uint8_t *frame, position pos, uint8_t ch);
+void oled_write_char_fix(uint8_t *frame, position pos, uint8_t ch);
+void oled_draw_fun(uint8_t *frame,func f,position pos,position pos1);
+void oled_write_string(uint8_t *frame, position pos, char *str);
+void oled_render_array(uint8_t *buf,uint16_t num);
+void oled_draw_line(uint8_t *frame, position pos, position pos1, uint8_t on);
 
-static inline int_fast16_t tool_Fast_abs(int_fast16_t t);
+void row_update(int page,uint8_t *line_buf);
+void partial_update(int page,uint8_t start_col,uint8_t *data,uint8_t len);
+
+
+static inline int oled_write_cmd(uint8_t cmd);
+static inline void oled_set_page(uint8_t page);
+static inline void oled_set_col(uint8_t start_col);
+static inline void oled_fill_screen_pure(uint8_t clo);
+static inline int16_t oled_get_font_index(uint8_t ch);
+static inline void oled_write_cmd_list(uint8_t *list,unsigned int num);
+
+static inline int16_t tool_fast_abs(int16_t t);
 #endif // !__SH1106

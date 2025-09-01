@@ -6,7 +6,7 @@ target_include_directories(ssd1306 PUBLIC
 
 target_link_libraries(ssd1306
     pico_stdlib
-    hardware_i2c
+    hardware_spi
     hardware_clocks
     hardware_dma
 )
