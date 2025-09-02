@@ -51,7 +51,7 @@ const uint32_t interval_ms = 10;
 static uint32_t start_ms = 0;
 
 queue_t adc_queue;
-const uint8_t queue_data_size = 20;
+const uint8_t queue_data_size = 50;
 
 void core1_task()
 {
@@ -60,20 +60,23 @@ void core1_task()
     adc_gpio_init(27);
     adc_gpio_init(28);
 
+    adc_set_round_robin(0b111);
+    adc_fifo_setup(true, true, 1, false, false);
+    adc_run(true);
+
     adc_data data = {0};
 
-    uint32_t last_adc_read = 0;
-
+    uint8_t offset = 0;
+    uint16_t *data_p = (uint16_t*)&data;
     while (true)
     {
         tud_task();
-        adc_select_input(0);
-        data.adc0_value = adc_read();
-        adc_select_input(1);
-        data.adc1_value = adc_read();
-        adc_select_input(2);
-        data.adc2_value = adc_read();
-        sleep_us(1);
+
+        uint16_t adc_value = adc_fifo_get_blocking();
+        data_p[offset] = adc_value;
+        
+        // printf("chan: %d, value: %d\n", offset, data_p[offset]);
+        offset = (offset + 1) % 3;
 
         hid_task(&data);
         queue_add_blocking(&adc_queue, &data);
@@ -180,11 +183,11 @@ void partial_update_frame(uint8_t *frame, adc_data *adc)
     uint16_t voltage2 = (adc->adc2_value * 3.3 * 1000) / 4095;
 
     // snprintf(adc0_str, sizeof(adc0_str), "%4d", adc->adc0_value);
-    snprintf(adc0_str, sizeof(adc0_str), "%4d", voltage0);
-    snprintf(adc1_str, sizeof(adc1_str), "%4d", voltage1);
-    snprintf(adc2_str, sizeof(adc2_str), "%4d", voltage2);
+    snprintf(adc0_str, sizeof(adc0_str), "%d", voltage0);
+    snprintf(adc1_str, sizeof(adc1_str), "%d", voltage1);
+    snprintf(adc2_str, sizeof(adc2_str), "%d", voltage2);
     snprintf(fps_str, sizeof(fps_str), "%d", send_ps);
-    snprintf(enc_str, sizeof(enc_str), "%3d", encoder_count);
+    snprintf(enc_str, sizeof(enc_str), "%d", encoder_count);
     snprintf(key_str, sizeof(key_str), "%d", key_press_count);
 
     if (first_partial_update)
@@ -272,9 +275,6 @@ void tud_cdc_rx_cb(uint8_t itf)
 
 int main()
 {
-    // stdio_init_all();
-
-    // sleep_ms(80);
 
     uint8_t frame[1024];
 
@@ -290,7 +290,7 @@ int main()
     gpio_set_dir(SPI0_DC, GPIO_OUT);
     gpio_set_dir(SPI0_CS, GPIO_OUT);
     gpio_set_dir(SPI0_RES, GPIO_OUT);
-    gpio_put(SPI0_CS, 0);
+    gpio_put(SPI0_CS, 1);
     gpio_put(SPI0_RES, 0);
     sleep_ms(50);
     gpio_put(SPI0_RES, 1);
@@ -323,7 +323,7 @@ int main()
     {
         // queue_remove_blocking(&adc_queue, &get_data);
         queue_try_remove(&adc_queue, &get_data);
-        info("core 0\n");
+        // info("core 0\n");
 
         frame_count++;
         partial_update_frame(frame, &get_data);

@@ -9,7 +9,7 @@
 #include "tusb.h"
 #include "../include/resource.h"
 
-#define MAGNETIC_THRESHOLD 60
+#define MAGNETIC_THRESHOLD 0
 
 
 void send_hid_report(uint8_t report_id, uint32_t btn)
