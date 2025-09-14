@@ -14,6 +14,7 @@
 #include <string.h>
 #include "pico/multicore.h"
 #include "pico/util/queue.h"
+#include "hardware/dma.h"
 
 #include "bsp/board.h"
 #include "tusb.h"
@@ -28,10 +29,12 @@
 
 #define info(msg) tud_cdc_n_write(0, (uint8_t const *)msg, sizeof(msg) - 1)
 
+void adc_dma_irq(void);
+
 const uint32_t ADC_READ_INTERVAL_MS = 10;
 
 static uint16_t last_encoder_count = 0;
-static volatile uint16_t encoder_count = 0;
+static volatile int16_t encoder_count = 0;
 static volatile uint16_t key_press_count = 0;
 static bool encoder_changed = false;
 static bool key_pressed = false;
@@ -53,6 +56,21 @@ static uint32_t start_ms = 0;
 queue_t adc_queue;
 const uint8_t queue_data_size = 50;
 
+static int dma_chan;
+static adc_data adc_value = {0};
+static uint16_t *adc_value_p = (uint16_t*)&adc_value;
+static uint8_t adc_offset = 0;
+
+void adc_dma_irq(){
+    dma_channel_acknowledge_irq0(dma_chan);
+    adc_run(false);
+    adc_select_input(0);
+
+    // queue_add_blocking(&adc_queue,&adc_value);
+    dma_channel_set_write_addr(dma_chan,adc_value_p,true);
+    adc_run(true);
+}
+
 void core1_task()
 {
     adc_init();
@@ -60,28 +78,38 @@ void core1_task()
     adc_gpio_init(27);
     adc_gpio_init(28);
 
+    adc_select_input(0);
     adc_set_round_robin(0b111);
     adc_fifo_setup(true, true, 1, false, false);
+
+    /*-------------DMA---------------*/
+    dma_chan = dma_claim_unused_channel(true);
+    dma_channel_config cfg = dma_channel_get_default_config(dma_chan);
+    
+    channel_config_set_dreq(&cfg,DREQ_ADC);
+    channel_config_set_read_increment(&cfg,false);
+    channel_config_set_write_increment(&cfg,true);
+    channel_config_set_transfer_data_size(&cfg,DMA_SIZE_16);
+
+    dma_channel_configure(dma_chan,&cfg,adc_value_p,&adc_hw->fifo,3,true);
+
+    dma_channel_set_irq0_enabled(dma_chan,true);
+    irq_set_exclusive_handler(DMA_IRQ_0,adc_dma_irq);
+    irq_set_enabled(DMA_IRQ_0,true);
+    /*-------------DMA---------------*/
+
     adc_run(true);
 
-    adc_data data = {0};
-
-    uint8_t offset = 0;
-    uint16_t *data_p = (uint16_t*)&data;
     while (true)
     {
         tud_task();
+        hid_task(&adc_value);
+        printf("adc_value0: %d\n",adc_value.adc0_value);
 
-        uint16_t adc_value = adc_fifo_get_blocking();
-        data_p[offset] = adc_value;
-        
-        // printf("chan: %d, value: %d\n", offset, data_p[offset]);
-        offset = (offset + 1) % 3;
-
-        hid_task(&data);
-        queue_add_blocking(&adc_queue, &data);
     }
 }
+
+
 
 void adc_progress(uint8_t *frame, adc_data *adc_value)
 {
@@ -136,6 +164,9 @@ void ec11_irq(uint gpio, uint32_t events)
     static bool ccw_fall = 0;
     static bool cw_fall = 0;
 
+    static bool sw_debounce = false; 
+    static uint32_t sw_debounce_time = 0;
+
     uint8_t enc_value = 0;
     enc_value = (gpio_state & 0x03);
 
@@ -164,10 +195,26 @@ void ec11_irq(uint gpio, uint32_t events)
     }
     else if (gpio == ENC_SW)
     {
-        if (!gpio_get(ENC_SW))
+        // if (!gpio_get(ENC_SW))
+        // {
+        //     key_pressed = true;
+        //     key_press_count++;
+        // }
+        uint32_t now = board_millis();
+        
+        if (!gpio_get(ENC_SW) && !sw_debounce)
         {
-            key_pressed = true;
-            key_press_count++;
+            sw_debounce = true;
+            sw_debounce_time = now;
+        }
+        else if (sw_debounce && now - sw_debounce_time >= 20)
+        {
+            if (!gpio_get(ENC_SW))
+            {
+                key_pressed = true;
+                key_press_count++;
+            }
+            sw_debounce = false;
         }
     }
 }
@@ -178,17 +225,19 @@ void partial_update_frame(uint8_t *frame, adc_data *adc)
 {
     uint32_t send_ps = fps;
 
-    uint16_t voltage0 = (adc->adc0_value * 3.3 * 1000) / 4095;
-    uint16_t voltage1 = (adc->adc1_value * 3.3 * 1000) / 4095;
-    uint16_t voltage2 = (adc->adc2_value * 3.3 * 1000) / 4095;
+    // uint16_t voltage0 = (adc->adc0_value * 3.3 * 1000) / 4095;
+    // uint16_t voltage1 = (adc->adc1_value * 3.3 * 1000) / 4095;
+    // uint16_t voltage2 = (adc->adc2_value * 3.3 * 1000) / 4095;
 
-    // snprintf(adc0_str, sizeof(adc0_str), "%4d", adc->adc0_value);
-    snprintf(adc0_str, sizeof(adc0_str), "%d", voltage0);
-    snprintf(adc1_str, sizeof(adc1_str), "%d", voltage1);
-    snprintf(adc2_str, sizeof(adc2_str), "%d", voltage2);
-    snprintf(fps_str, sizeof(fps_str), "%d", send_ps);
-    snprintf(enc_str, sizeof(enc_str), "%d", encoder_count);
-    snprintf(key_str, sizeof(key_str), "%d", key_press_count);
+    snprintf(adc0_str, sizeof(adc0_str), "%4d", adc->adc0_value);
+    snprintf(adc1_str, sizeof(adc1_str), "%4d", adc->adc1_value);
+    snprintf(adc2_str, sizeof(adc2_str), "%4d", adc->adc2_value);
+    // snprintf(adc0_str, sizeof(adc0_str), "%4d", voltage0);
+    // snprintf(adc1_str, sizeof(adc1_str), "%4d", voltage1);
+    // snprintf(adc2_str, sizeof(adc2_str), "%4d", voltage2);
+    snprintf(fps_str, sizeof(fps_str), "%4d", send_ps);
+    snprintf(enc_str, sizeof(enc_str), "%3d", encoder_count);
+    snprintf(key_str, sizeof(key_str), "%3d", key_press_count);
 
     if (first_partial_update)
     {
@@ -196,13 +245,13 @@ void partial_update_frame(uint8_t *frame, adc_data *adc)
         oled_write_string(frame, (position){60, 8}, fps_str);
         oled_write_string(frame, (position){0, 16}, "ADC_0:");
         oled_write_string(frame, (position){80, 16}, adc0_str);
-        oled_write_string(frame, (position){112, 16}, "MV");
+        // oled_write_string(frame, (position){112, 16}, "MV");
         oled_write_string(frame, (position){0, 24}, "ADC_1:");
         oled_write_string(frame, (position){80, 24}, adc1_str);
-        oled_write_string(frame, (position){112, 24}, "MV");
+        // oled_write_string(frame, (position){112, 24}, "MV");
         oled_write_string(frame, (position){0, 32}, "ADC_2:");
         oled_write_string(frame, (position){80, 32}, adc2_str);
-        oled_write_string(frame, (position){112, 32}, "MV");
+        // oled_write_string(frame, (position){112, 32}, "MV");
         oled_write_string(frame, (position){0, 40}, "EC_COUNT:");
         oled_write_string(frame, (position){100, 40}, enc_str);
         oled_write_string(frame, (position){0, 48}, "KEY_COUNT:");
@@ -281,7 +330,7 @@ int main()
     gpio_init(23);
     gpio_set_dir(23, GPIO_OUT);
 
-    spi_init(OLED_SPI_PORT, OLED_SPI_BAUD);
+    // spi_init(OLED_SPI_PORT, OLED_SPI_BAUD);
     gpio_init(SPI0_DC);
     gpio_init(SPI0_RES);
     gpio_init(SPI0_CS);
@@ -322,8 +371,10 @@ int main()
     while (true)
     {
         // queue_remove_blocking(&adc_queue, &get_data);
-        queue_try_remove(&adc_queue, &get_data);
+        // queue_try_remove(&adc_queue, &get_data);
         // info("core 0\n");
+
+        get_data = adc_value;
 
         frame_count++;
         partial_update_frame(frame, &get_data);

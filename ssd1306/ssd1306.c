@@ -15,6 +15,10 @@
 #include <math.h>
 #include "hardware/dma.h"
 #include "hardware/spi.h"
+#include "../build/spi.pio.h"
+#include "hardware/pio.h"
+
+static pio_spi_inst_t pio_spi;
 
 // Function to get the absolute value of a signed integer
 static inline int16_t tool_fast_abs(int16_t t)
@@ -25,6 +29,15 @@ static inline int16_t tool_fast_abs(int16_t t)
 // Initialize the OLED display
 void oled_init(void)
 {
+
+    PIO pio = pio0;
+    uint sm = 0;
+    uint offset = pio_add_program(pio, &spi_cpha0_program);
+    pio_spi_init(pio, sm, offset, 8, 1.0f, false, false, SPI0_SCK, SPI0_TX, SPI0_TX);
+    pio_spi.cs_pin = SPI0_CS;
+    pio_spi.pio = pio;
+    pio_spi.sm = sm;
+
     uint8_t init_cmds[] = {
         OLED_DISPLAY_OFF,
         0xD5, 0xF1,           // 设置时钟分频
@@ -77,13 +90,64 @@ void oled_init(void)
     // oled_write_cmd(OLED_DISPLAY_ON);                     // Turn on the display
 }
 
+void pio_spi_init(PIO pio, uint sm, uint prog_offs, uint n_bits,float clkdiv, bool cpha, bool cpol, uint pin_sck, uint pin_mosi, uint pin_miso)
+{
+    pio_sm_config c = cpha ? spi_cpha1_program_get_default_config(prog_offs) : spi_cpha0_program_get_default_config(prog_offs);
+    sm_config_set_out_pins(&c, pin_mosi, 1);
+    sm_config_set_in_pins(&c, pin_miso);
+    sm_config_set_sideset_pins(&c, pin_sck);
+
+    sm_config_set_out_shift(&c, false, true, n_bits);
+    sm_config_set_in_shift(&c, false, true, n_bits);
+    sm_config_set_clkdiv(&c, clkdiv);
+
+    // MOSI, SCK output are low, MISO is input
+    pio_sm_set_pins_with_mask(pio, sm, 0, (1u << pin_sck) | (1u << pin_mosi));
+    pio_sm_set_pindirs_with_mask(pio, sm, (1u << pin_sck) | (1u << pin_mosi), (1u << pin_sck) | (1u << pin_mosi) | (1u << pin_miso));
+    pio_gpio_init(pio, pin_mosi);
+    pio_gpio_init(pio, pin_miso);
+    pio_gpio_init(pio, pin_sck);
+
+    // The pin muxes can be configured to invert the output (among other things
+    // and this is a cheesy way to get CPOL=1
+    gpio_set_outover(pin_sck, cpol ? GPIO_OVERRIDE_INVERT : GPIO_OVERRIDE_NORMAL);
+    // SPI is synchronous, so bypass input synchroniser to reduce input delay.
+    hw_set_bits(&pio->input_sync_bypass, 1u << pin_miso);
+
+    pio_sm_init(pio, sm, prog_offs, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+
+void __time_critical_func(pio_spi_write8_blocking)(const pio_spi_inst_t *spi, const uint8_t *src, size_t len)
+{
+    size_t tx_remain = len, rx_remain = len;
+    // Do 8 bit accesses on FIFO, so that write data is byte-replicated. This
+    // gets us the left-justification for free (for MSB-first shift-out)
+    io_rw_8 *txfifo = (io_rw_8 *)&spi->pio->txf[spi->sm];
+    io_rw_8 *rxfifo = (io_rw_8 *)&spi->pio->rxf[spi->sm];
+    while (tx_remain || rx_remain)
+    {
+        if (tx_remain && !pio_sm_is_tx_fifo_full(spi->pio, spi->sm))
+        {
+            *txfifo = *src++;
+            --tx_remain;
+        }
+        if (rx_remain && !pio_sm_is_rx_fifo_empty(spi->pio, spi->sm))
+        {
+            (void)*rxfifo;
+            --rx_remain;
+        }
+    }
+}
+
+
 // Write a single command to the OLED
 static inline int oled_write_cmd(uint8_t cmd)
 {
     gpio_put(SPI0_CS, 0);
     gpio_put(SPI0_DC, 0);
-    return spi_write_blocking(OLED_SPI_PORT, &cmd, 1);
-    gpio_put(SPI0_CS, 1);
+    pio_spi_write8_blocking(&pio_spi, &cmd, 1);
+    // gpio_put(SPI0_CS, 1);
 }
 
 // Write a list of commands to the OLED
@@ -108,7 +172,7 @@ void oled_fill_white()
     gpio_put(SPI0_CS, 0);
     oled_set_page(2);
     gpio_put(SPI0_DC, 1);
-    spi_write_blocking(OLED_SPI_PORT, white_seq, count_of(white_seq) + 1);
+    pio_spi_write8_blocking(&pio_spi, white_seq, count_of(white_seq) + 1);
 
     gpio_put(SPI0_CS, 1);
 }
@@ -123,7 +187,7 @@ static inline void oled_fill_screen_pure(uint8_t color)
         for (size_t i = 0; i < OLED_WIDTH; i++)
         {
             gpio_put(SPI0_DC, 1);
-            spi_write_blocking(OLED_SPI_PORT, &color, 1); // Write color data
+            pio_spi_write8_blocking(&pio_spi, &color, 1); // Write color data
         }
     }
     gpio_put(SPI0_CS, 1);
@@ -148,7 +212,7 @@ void oled_render_array(uint8_t *buf, uint16_t num)
         gpio_put(SPI0_CS, 0);
         memcpy(tmp + 1, buf, num); // Copy data
 
-        spi_write_blocking(OLED_SPI_PORT, tmp, num + 1); // Send data
+        pio_spi_write8_blocking(&pio_spi, tmp, num + 1); // Send data
         gpio_put(SPI0_CS, 1);
         free(tmp);
         return;
@@ -166,7 +230,7 @@ void oled_render_array(uint8_t *buf, uint16_t num)
         oled_set_page(page);                                  // Set current page
         memcpy(tmp + 1, buf + page * OLED_WIDTH, OLED_WIDTH); // Copy the full page data
         gpio_put(SPI0_CS, 0);
-        spi_write_blocking(OLED_SPI_PORT, tmp, OLED_WIDTH + 1); // Send page data
+        pio_spi_write8_blocking(&pio_spi, tmp, OLED_WIDTH + 1); // Send page data
         gpio_put(SPI0_CS, 1);
     }
 
@@ -176,7 +240,7 @@ void oled_render_array(uint8_t *buf, uint16_t num)
         oled_set_page(pages);                                 // Set next page
         memcpy(tmp + 1, buf + pages * OLED_WIDTH, remaining); // Copy remaining data
         gpio_put(SPI0_CS, 0);
-        spi_write_blocking(OLED_SPI_PORT, tmp, remaining + 1); // Send remaining data
+        pio_spi_write8_blocking(&pio_spi, tmp, remaining + 1); // Send remaining data
         gpio_put(SPI0_CS, 1);
     }
 
@@ -195,7 +259,7 @@ void oled_render_frame(uint8_t *frame)
         gpio_put(SPI0_DC, 1);
         oled_set_page(page); // Set to current page
         oled_set_col(0);
-        spi_write_blocking(OLED_SPI_PORT, frame + OLED_WIDTH * page, OLED_WIDTH); // Send the data
+        pio_spi_write8_blocking(&pio_spi, frame + OLED_WIDTH * page, OLED_WIDTH); // Send the data
         gpio_put(SPI0_CS, 1);
     }
 }
@@ -231,7 +295,7 @@ void oled_render_frame_dma(uint8_t *frame)
         oled_set_page(page - 1);                             // Set current page
         dma_channel_wait_for_finish_blocking(oled_dma_chan); // Wait for DMA transfer to finish
         gpio_put(SPI0_CS, 0);
-        spi_write_blocking(OLED_SPI_PORT, buf0, OLED_WIDTH + 1); // Send the data
+        pio_spi_write8_blocking(&pio_spi, buf0, OLED_WIDTH + 1); // Send the data
         gpio_put(SPI0_CS, 1);
         dma_channel_set_read_addr(oled_dma_chan, frame + page * OLED_WIDTH, false); // Set next read address
         dma_channel_set_write_addr(oled_dma_chan, buf0 + 1, true);                  // Set buffer write address
@@ -464,7 +528,7 @@ void row_update(int page, uint8_t *line_buf)
     // 发送数据到OLED
     gpio_put(SPI0_DC, 1);
     gpio_put(SPI0_CS, 0);
-    spi_write_blocking(OLED_SPI_PORT, line_buf, OLED_WIDTH);
+    pio_spi_write8_blocking(&pio_spi, line_buf, OLED_WIDTH);
     gpio_put(SPI0_CS, 1);
 }
 
@@ -485,6 +549,6 @@ void partial_update(int page, uint8_t start_col, uint8_t *data, uint8_t len)
 
     gpio_put(SPI0_DC, 1);
     gpio_put(SPI0_CS, 0);
-    spi_write_blocking(OLED_SPI_PORT, data, len);
+    pio_spi_write8_blocking(&pio_spi, data, len);
     gpio_put(SPI0_CS, 1);
 }

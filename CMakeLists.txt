@@ -43,6 +43,8 @@ add_executable(uso
 add_subdirectory(ssd1306)
 add_subdirectory(usb)
 
+pico_generate_pio_header(uso ${CMAKE_CURRENT_LIST_DIR}/ssd1306/spi.pio)
+
 pico_set_program_name(uso "uso")
 pico_set_program_version(uso "0.1")
 
@@ -61,6 +63,7 @@ target_link_libraries(uso
   pico_util
   tinyusb_device
   tinyusb_board
+  hardware_pio
 )
 
 # Add the standard include files to the build

@@ -9,4 +9,5 @@ target_link_libraries(ssd1306
     hardware_spi
     hardware_clocks
     hardware_dma
+    hardware_pio
 )

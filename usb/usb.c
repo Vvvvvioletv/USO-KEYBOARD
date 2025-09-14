@@ -9,8 +9,7 @@
 #include "tusb.h"
 #include "../include/resource.h"
 
-#define MAGNETIC_THRESHOLD 0
-
+#define MAGNETIC_THRESHOLD 400
 
 void send_hid_report(uint8_t report_id, uint32_t btn)
 {
@@ -58,28 +57,40 @@ void hid_task(adc_data *data)
 {
     uint32_t btn = 0;
     static uint32_t last_btn = 0;
-    if (data->adc0_value < MAGNETIC_THRESHOLD){
+
+    static uint32_t debounce_timer = 0;
+
+    if (data->adc0_value < MAGNETIC_THRESHOLD)
+    {
         btn |= (1 << 0);
     }
-    if (data->adc1_value < MAGNETIC_THRESHOLD){
+    if (data->adc1_value < MAGNETIC_THRESHOLD)
+    {
         btn |= (1 << 1);
     }
-    if (data->adc2_value < MAGNETIC_THRESHOLD){
+    if (data->adc2_value < MAGNETIC_THRESHOLD)
+    {
         btn |= (1 << 2);
     }
-    if (btn != last_btn){
-        if (!tud_suspended())
+    if (btn != last_btn)
+    {
+        if (board_millis() - debounce_timer > 20)
         {
-            send_hid_report(REPORT_ID_KEYBOARD, btn);
+            if (!tud_suspended())
+            {
+                send_hid_report(REPORT_ID_KEYBOARD, btn);
+            }
+            else if (btn)
+            {
+                tud_remote_wakeup();
+            }
+            last_btn = btn;
+            debounce_timer = board_millis();
         }
-        else if (btn)
-        {
-            tud_remote_wakeup();
-        }
-        last_btn = btn;
+    }else{
+        debounce_timer = board_millis();
     }
 }
-
 
 void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_t len)
 {
