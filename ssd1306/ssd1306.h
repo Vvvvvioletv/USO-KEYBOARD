@@ -2,6 +2,7 @@
 #define __SH1106
 
 #include <stdint.h>
+#include "../build/spi.pio.h"
 
 #define OLED_WIDTH  128
 #define OLED_HEIGHT 64
@@ -44,7 +45,11 @@
 #define OLED_PAGES                      _u(8)
 #define FRAME_NUM                          2
 
-
+typedef struct pio_spi_inst {
+    PIO pio;
+    uint sm;
+    uint cs_pin;
+} pio_spi_inst_t;
 
 typedef struct{
     uint8_t frame[OLED_SIZE_BYTE];
@@ -78,6 +83,8 @@ void oled_draw_line(uint8_t *frame, position pos, position pos1, uint8_t on);
 void row_update(int page,uint8_t *line_buf);
 void partial_update(int page,uint8_t start_col,uint8_t *data,uint8_t len);
 
+void pio_spi_init(PIO pio, uint sm, uint prog_offs, uint n_bits,float clkdiv, bool cpha, bool cpol, uint pin_sck, uint pin_mosi, uint pin_miso);
+void pio_spi_write8_blocking(const pio_spi_inst_t *spi, const uint8_t *src, size_t len);
 
 static inline int oled_write_cmd(uint8_t cmd);
 static inline void oled_set_page(uint8_t page);
